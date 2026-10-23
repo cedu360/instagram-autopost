@@ -1,0 +1,2 @@
+Coloque aqui as fotos (JPG) e vídeos (MP4) dos posts.
+Depois de ligar o GitHub Pages, cada arquivo fica em https://SEU-USUARIO.github.io/SEU-REPO/media/NOME-DO-ARQUIVO

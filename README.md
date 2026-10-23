@@ -9,11 +9,21 @@ Schedule Instagram **feed posts, Reels and Stories** from a simple JSON queue, p
 - Anti-ban limits built in: minimum gap between runs, daily cap, a few minutes between items, and never the same item twice.
 - Refreshes the long-lived token on every run, so it does not expire while you post.
 
+## The path, from zero to post
+
+```
+1. CREATE the content   →   2. ADD it to the queue     →   3. THE ROBOT POSTS
+   Canva / Gemini (photos)     media/ folder + queue.json      5 slots a day
+   Runway (reels)              here on GitHub                  on your Instagram
+```
+
+The full beginner walkthrough (with screenshots-level steps) is in the [Portuguese README](README.pt-BR.md); an AI can run the robot for you with [`skill/SKILL.md`](skill/SKILL.md).
+
 ## How it works
 
 1. Host your images and videos at public HTTPS URLs (GitHub Pages works great).
 2. List them in `queue.json` with a date and time (see `examples/queue.json`).
-3. Run `node publish.mjs` every hour. Whatever is due gets published; everything else waits.
+3. The included workflow runs at fixed slots (Brasília time: 09:37 photo + story, 11:47 reel, 14:07 photo + story, 16:47 reel, 19:37 photo + story). Each slot runs `node publish.mjs --types FEED,STORIES` or `--types REELS` and takes the next item of each type. Items without `at` go out in queue order; `"approved": false` holds an item. You can also run `node publish.mjs` hourly instead: whatever is due gets published.
 
 ```json
 [
@@ -37,6 +47,7 @@ Schedule Instagram **feed posts, Reels and Stories** from a simple JSON queue, p
 ```bash
 IG_TOKEN=... node publish.mjs --dry-run   # what would go out now
 IG_TOKEN=... node publish.mjs             # publish what is due
+IG_TOKEN=... node publish.mjs --types FEED,STORIES   # slot mode: next feed + next story
 IG_TOKEN=... node publish.mjs --one FEED https://.../photo.jpg "caption"
 ```
 

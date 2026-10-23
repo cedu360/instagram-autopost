@@ -5,6 +5,7 @@
 //   node publish.mjs                 publish every item that is due now (queue.json)
 //   node publish.mjs --dry-run       show what would be published
 //   node publish.mjs --one FEED|STORIES|REELS <url> ["caption"]
+//   node publish.mjs --types FEED,STORIES   slot mode: the next approved item of each listed type (one per type)
 // Env: IG_TOKEN (required), QUEUE (queue.json), STATE (state.json), TZ_OFFSET_MIN (e.g. -180),
 //      MIN_GAP_MIN between runs (default 30), MAX_PER_DAY (default 8), MAX_PER_RUN (default 3; items in one run wait a few minutes apart),
 //      MAX_FEED / MAX_REELS / MAX_STORIES per day (default 3 / 2 / 3), TOPIC_GAP_H (default 24)
@@ -26,6 +27,8 @@ const CAP = { FEED: Number(env.MAX_FEED || 3), REELS: Number(env.MAX_REELS || 2)
 const TOPIC_GAP = Number(env.TOPIC_GAP_H || 24) * 3600e3;
 const args = process.argv.slice(2);
 const dry = args.includes("--dry-run");
+// slot mode (fixed times of day): only these types, one item each, in queue order
+const TYPES = args.includes("--types") ? args[args.indexOf("--types") + 1].toUpperCase().split(",") : null;
 const token = env.IG_TOKEN;
 if (!token && !dry) { console.error("Missing IG_TOKEN"); process.exit(1); }
 
@@ -48,7 +51,8 @@ function dueItems() {
   if (args[0] === "--one") return [{ id: `one-${Date.now()}`, type: args[1], url: args[2], caption: args[3] }];
   const queue = JSON.parse(readFileSync(QUEUE, "utf8"));
   const now = localNow().toISOString().slice(0, 16);
-  return queue.filter((i) => !state.published[i.id] && !state.skipped[i.id] && (!i.at || i.at.slice(0, 16) <= now));
+  const due = queue.filter((i) => i.approved !== false && !state.published[i.id] && !state.skipped[i.id] && (!i.at || i.at.slice(0, 16) <= now));
+  return TYPES ? due.filter((i) => TYPES.includes(i.type)) : due;
 }
 
 // What is already on the profile: recent feed posts and reels, plus stories from the last 24 h
@@ -107,15 +111,21 @@ async function publish(item, userId) {
 
 const items = dueItems();
 if (!items.length) { console.log("Nothing due."); process.exit(0); }
-if (dry) { for (const i of items.slice(0, MAX_PER_RUN)) console.log(`[dry-run] ${i.type} ${i.url}`); process.exit(0); }
+if (dry) {
+  const seen = new Set();
+  for (const i of items) { if (TYPES && seen.has(i.type)) continue; seen.add(i.type); console.log(`[dry-run] ${i.type} ${i.url}`); }
+  process.exit(0);
+}
 const me = await api("/me", { fields: "user_id,username" }, "GET");
 const profile = await readProfile(me.user_id);
 const day = (iso) => new Date(Date.parse(iso) + OFFSET).toISOString().slice(0, 10);
 const todayCount = { FEED: 0, REELS: 0, STORIES: 0 };
 for (const p of profile) if (day(p.at) === today()) todayCount[p.type]++;
 let n = 0;
+const doneTypes = new Set();
 for (const item of items) {
   if (n >= MAX_PER_RUN) break;
+  if (TYPES && doneTypes.has(item.type)) continue;
   if (todayCount[item.type] >= CAP[item.type]) { console.log(`Waiting: ${item.type} cap for today reached (${CAP[item.type]}).`); continue; }
   if (topicBusy(item)) { console.log(`Waiting: topic "${item.topic}" was posted in the last ${TOPIC_GAP / 3600e3} h.`); continue; }
   const hash = await hashOf(item.url), dup = repeated(item, hash, profile);
@@ -125,6 +135,7 @@ for (const item of items) {
   if (n++) await sleep(Math.min(MIN_GAP, 5 * 60e3));
   const res = await publish(item, me.user_id);
   todayCount[item.type]++;
+  doneTypes.add(item.type);
   profile.push({ type: item.type, caption: item.caption || "", at: new Date().toISOString() });
   state.published[item.id] = { media: res.id, at: new Date().toISOString(), day: today(), hash, topic: item.topic };
   writeFileSync(STATE, JSON.stringify(state, null, 1));
