@@ -6,8 +6,13 @@
 //   node publish.mjs --dry-run       show what would be published
 //   node publish.mjs --one FEED|STORIES|REELS <url> ["caption"]
 // Env: IG_TOKEN (required), QUEUE (queue.json), STATE (state.json), TZ_OFFSET_MIN (e.g. -180),
-//      MIN_GAP_MIN between runs (default 30), MAX_PER_DAY (default 8), MAX_PER_RUN (default 3; items in one run wait a few minutes apart)
+//      MIN_GAP_MIN between runs (default 30), MAX_PER_DAY (default 8), MAX_PER_RUN (default 3; items in one run wait a few minutes apart),
+//      MAX_FEED / MAX_REELS / MAX_STORIES per day (default 3 / 2 / 3), TOPIC_GAP_H (default 24)
+// Before each post it reads your live profile: per-type daily caps are counted there, and an item is skipped
+// when the same image was already published (content hash) or its caption is close to a recent post.
+// Items with the same "topic" as something posted in the last TOPIC_GAP_H hours wait for a later run.
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { createHash } from "node:crypto";
 
 const API = "https://graph.instagram.com/v23.0";
 const env = process.env;
@@ -17,12 +22,15 @@ const MIN_GAP = Number(env.MIN_GAP_MIN || 30) * 60e3;
 const MAX_PER_DAY = Number(env.MAX_PER_DAY || 8);
 const MAX_PER_RUN = Number(env.MAX_PER_RUN || 3);
 const OFFSET = Number(env.TZ_OFFSET_MIN || 0) * 60e3;
+const CAP = { FEED: Number(env.MAX_FEED || 3), REELS: Number(env.MAX_REELS || 2), STORIES: Number(env.MAX_STORIES || 3) };
+const TOPIC_GAP = Number(env.TOPIC_GAP_H || 24) * 3600e3;
 const args = process.argv.slice(2);
 const dry = args.includes("--dry-run");
 const token = env.IG_TOKEN;
 if (!token && !dry) { console.error("Missing IG_TOKEN"); process.exit(1); }
 
 const state = existsSync(STATE) ? JSON.parse(readFileSync(STATE, "utf8")) : { published: {} };
+state.skipped ||= {};
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const localNow = () => new Date(Date.now() + OFFSET);
 const today = () => localNow().toISOString().slice(0, 10);
@@ -40,8 +48,33 @@ function dueItems() {
   if (args[0] === "--one") return [{ id: `one-${Date.now()}`, type: args[1], url: args[2], caption: args[3] }];
   const queue = JSON.parse(readFileSync(QUEUE, "utf8"));
   const now = localNow().toISOString().slice(0, 16);
-  return queue.filter((i) => !state.published[i.id] && (!i.at || i.at.slice(0, 16) <= now));
+  return queue.filter((i) => !state.published[i.id] && !state.skipped[i.id] && (!i.at || i.at.slice(0, 16) <= now));
 }
+
+// What is already on the profile: recent feed posts and reels, plus stories from the last 24 h
+async function readProfile(userId) {
+  const m = await api(`/${userId}/media`, { fields: "caption,media_product_type,timestamp", limit: 40 }, "GET");
+  let s = { data: [] };
+  try { s = await api(`/${userId}/stories`, { fields: "timestamp" }, "GET"); } catch {}
+  return [...m.data.map((x) => ({ type: x.media_product_type === "REELS" ? "REELS" : "FEED", caption: x.caption || "", at: x.timestamp })),
+    ...s.data.map((x) => ({ type: "STORIES", caption: "", at: x.timestamp }))];
+}
+const words = (t = "") => new Set(t.toLowerCase().replace(/#\S+|[^\p{L}\p{N}\s]/gu, " ").split(/\s+/).filter((w) => w.length > 3));
+function similar(a, b) {
+  const A = words(a), B = words(b); if (!A.size || !B.size) return false;
+  let c = 0; for (const w of A) if (B.has(w)) c++;
+  return c / Math.min(A.size, B.size) >= 0.6;
+}
+async function hashOf(url) {
+  const r = await fetch(url); if (!r.ok) throw new Error(`Media not reachable (${r.status}): ${url}`);
+  return createHash("sha1").update(Buffer.from(await r.arrayBuffer())).digest("hex");
+}
+function repeated(item, hash, profile) {
+  if (Object.values(state.published).some((p) => p.hash === hash)) return "same image already published";
+  if (item.caption && profile.some((p) => similar(item.caption, p.caption))) return "caption too close to a recent post";
+  return null;
+}
+const topicBusy = (item) => item.topic && Object.values(state.published).some((p) => p.topic === item.topic && Date.now() - Date.parse(p.at) < TOPIC_GAP);
 
 function guard(firstOfRun) {
   const times = Object.values(state.published).map((p) => Date.parse(p.at)).sort((a, b) => b - a);
@@ -72,16 +105,28 @@ async function publish(item, userId) {
   throw new Error(`Timed out processing ${item.url}`);
 }
 
-const items = dueItems().slice(0, MAX_PER_RUN);
+const items = dueItems();
 if (!items.length) { console.log("Nothing due."); process.exit(0); }
-if (dry) { for (const i of items) console.log(`[dry-run] ${i.type} ${i.url}`); process.exit(0); }
+if (dry) { for (const i of items.slice(0, MAX_PER_RUN)) console.log(`[dry-run] ${i.type} ${i.url}`); process.exit(0); }
 const me = await api("/me", { fields: "user_id,username" }, "GET");
-for (const [n, item] of items.entries()) {
+const profile = await readProfile(me.user_id);
+const day = (iso) => new Date(Date.parse(iso) + OFFSET).toISOString().slice(0, 10);
+const todayCount = { FEED: 0, REELS: 0, STORIES: 0 };
+for (const p of profile) if (day(p.at) === today()) todayCount[p.type]++;
+let n = 0;
+for (const item of items) {
+  if (n >= MAX_PER_RUN) break;
+  if (todayCount[item.type] >= CAP[item.type]) { console.log(`Waiting: ${item.type} cap for today reached (${CAP[item.type]}).`); continue; }
+  if (topicBusy(item)) { console.log(`Waiting: topic "${item.topic}" was posted in the last ${TOPIC_GAP / 3600e3} h.`); continue; }
+  const hash = await hashOf(item.url), dup = repeated(item, hash, profile);
+  if (dup) { console.log(`Skipped ${item.id}: ${dup}.`); state.skipped[item.id] = { why: dup, at: new Date().toISOString() }; writeFileSync(STATE, JSON.stringify(state, null, 1)); continue; }
   const why = guard(n === 0);
   if (why) { console.log(`Stopping: ${why}.`); break; }
-  if (n) await sleep(Math.min(MIN_GAP, 5 * 60e3));
+  if (n++) await sleep(Math.min(MIN_GAP, 5 * 60e3));
   const res = await publish(item, me.user_id);
-  state.published[item.id] = { media: res.id, at: new Date().toISOString(), day: today() };
+  todayCount[item.type]++;
+  profile.push({ type: item.type, caption: item.caption || "", at: new Date().toISOString() });
+  state.published[item.id] = { media: res.id, at: new Date().toISOString(), day: today(), hash, topic: item.topic };
   writeFileSync(STATE, JSON.stringify(state, null, 1));
   console.log(`Published ${item.type} ${item.id} on @${me.username}: ${res.id}`);
 }

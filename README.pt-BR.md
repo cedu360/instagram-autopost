@@ -15,6 +15,8 @@ Agende **posts no feed, Reels e Stories** do Instagram a partir de uma fila em J
 2. Liste tudo em `queue.json` com data e hora (`at`, horário local; use `TZ_OFFSET_MIN=-180` para Brasília).
 3. Rode `node publish.mjs` de hora em hora. O que já venceu é publicado; o resto espera. O que saiu fica em `state.json`.
 
+**Ele confere o perfil antes.** Antes de cada post o robô lê seus posts, reels e stories no ar. Pula o item cuja imagem já foi publicada (hash do arquivo) ou cuja legenda é parecida com um post recente, respeita o limite diário de cada tipo (`MAX_FEED` 3, `MAX_REELS` 2, `MAX_STORIES` 3) e segura o item cujo `topic` (opcional) saiu nas últimas 24 h (`TOPIC_GAP_H`). Ritmo de exemplo: 3 stories (manhã, tarde e noite) e 2 reels entre eles.
+
 ## Configuração (10 minutos)
 
 1. Mude a conta do Instagram para **Profissional** (Empresa ou Criador).
