@@ -59,7 +59,13 @@ async function publish(item, userId) {
   const c = await api(`/${userId}/media`, p);
   for (let i = 0; i < 60; i++) {
     const s = await api(`/${c.id}`, { fields: "status_code" }, "GET");
-    if (s.status_code === "FINISHED") return api(`/${userId}/media_publish`, { creation_id: c.id });
+    if (s.status_code === "FINISHED") {
+      // Instagram sometimes answers 9007 "media is not ready" right after FINISHED
+      for (let j = 0; ; j++) {
+        try { return await api(`/${userId}/media_publish`, { creation_id: c.id }); }
+        catch (e) { if (j >= 5 || !String(e.message).includes("9007")) throw e; await sleep(10000); }
+      }
+    }
     if (s.status_code === "ERROR") throw new Error(`Instagram rejected ${item.url}`);
     await sleep(5000);
   }
