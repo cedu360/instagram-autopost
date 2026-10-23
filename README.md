@@ -25,6 +25,8 @@ Schedule Instagram **feed posts, Reels and Stories** from a simple JSON queue, p
 
 `at` is local time (set `TZ_OFFSET_MIN`, e.g. `-180` for Brasília). Published items are recorded in `state.json`.
 
+**It checks your profile first.** Before each post the robot reads your recent posts, reels and live stories. It skips an item whose image was already published (content hash) or whose caption is too close to a recent post, keeps each type under its daily cap, and holds back an item whose optional `topic` was posted in the last 24 h. Example rhythm: 3 stories (morning, afternoon, night) and 2 reels in between.
+
 ## Setup (10 minutes)
 
 1. Switch your Instagram account to **Professional** (Business or Creator).
@@ -46,6 +48,8 @@ IG_TOKEN=... node publish.mjs --one FEED https://.../photo.jpg "caption"
 | `MIN_GAP_MIN` | `30` | minimum minutes since the previous run's last post |
 | `MAX_PER_DAY` | `8` | hard daily cap |
 | `MAX_PER_RUN` | `3` | items per run (a few minutes apart) |
+| `MAX_FEED` / `MAX_REELS` / `MAX_STORIES` | `3` / `2` / `3` | per-type daily caps, counted on your live profile |
+| `TOPIC_GAP_H` | `24` | hours before an item with the same `topic` can go out |
 
 ## Media requirements (Meta)
 
