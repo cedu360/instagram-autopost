@@ -1,0 +1,23 @@
+name: autopost
+on:
+  schedule:
+    - cron: "17 * * * *"   # every hour; the queue decides what is due
+  workflow_dispatch: {}
+permissions:
+  contents: write
+concurrency: autopost
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: '[ -n "$IG_TOKEN" ] || { echo "IG_TOKEN secret not set, skipping"; exit 0; }; node publish.mjs'
+        env:
+          IG_TOKEN: ${{ secrets.IG_TOKEN }}
+          TZ_OFFSET_MIN: ${{ vars.TZ_OFFSET_MIN || '0' }}
+      - name: Save state
+        run: |
+          git config user.name "autopost"; git config user.email "autopost@users.noreply.github.com"
+          git add state.json 2>/dev/null && git commit -m "autopost: state" && git push || true

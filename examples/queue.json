@@ -1,0 +1,5 @@
+[
+ { "id": "2026-11-01-feed-1", "at": "2026-11-01T09:30", "type": "FEED", "url": "https://example.com/media/post-01.jpg", "caption": "Your caption here.\n\n#yourbrand" },
+ { "id": "2026-11-01-story-1", "at": "2026-11-01T09:45", "type": "STORIES", "url": "https://example.com/media/story-01.jpg" },
+ { "id": "2026-11-01-reel-1", "at": "2026-11-01T13:00", "type": "REELS", "url": "https://example.com/media/reel-01.mp4", "caption": "Reel caption.\n\n#yourbrand" }
+]
